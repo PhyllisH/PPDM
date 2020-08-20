@@ -11,8 +11,8 @@ dataset_factory = {
     'hoia': HOIA
 }
 
+
 def get_dataset(dataset):
-  class Dataset(dataset_factory[dataset]):
-      pass
-  return Dataset
-  
+    class Dataset(dataset_factory[dataset]):
+        pass
+    return Dataset
