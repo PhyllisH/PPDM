@@ -125,7 +125,7 @@ class HICO(Dataset):
             s = max(img.shape[0], img.shape[1]) * 1.0
             input_h, input_w = self.opt.input_h, self.opt.input_w
 
-        flipped = False
+        flipped = True
         if self.split == 'train':
             if not self.opt.not_rand_crop:
                 s = s * np.random.choice(np.arange(0.7, 1.4, 0.1))
