@@ -25,6 +25,7 @@ class HoidetDetector(BaseDetector):
         self.triplet_labels = np.nonzero(self.corre_mat)
         self.triplet_labels = list(zip(self.triplet_labels[0], self.triplet_labels[1]))
         self.corre_mat = torch.tensor(self.corre_mat).float().cuda()
+        
     def process(self, images, return_time=False):
 
         with torch.no_grad():
@@ -89,7 +90,7 @@ class HoidetDetector(BaseDetector):
             rel_i = rel[i, :]
             sub_id = int(rel_i[0])
             obj_id = int(rel_i[1])
-            if (int(rel_i[2]),int(det_obj[0,obj_id,-1])) not in self.triplet_labels:
+            if (int(rel_i[2]), int(det_obj[0,obj_id,-1])) not in self.triplet_labels:
                 continue
             if sub_id not in sub_match_dict.keys():
                 sub_match_dict[sub_id] = count
@@ -100,7 +101,8 @@ class HoidetDetector(BaseDetector):
                 output['predictions'].append({'bbox': [bbox_i_refine[0], bbox_i_refine[1],
                                                        bbox_i_refine[0] + bbox_i_refine[2],
                                                        bbox_i_refine[1] + bbox_i_refine[3]],
-                                              'category_id': obj_cate_ids[int(det_sub[0, sub_id, -1])]})
+                                              'category_id': obj_cate_ids[int(det_sub[0, sub_id, -1])],
+                                              'score': det_sub[0, sub_id, -2]})
             if obj_id not in obj_match_dict.keys():
                 obj_match_dict[obj_id] = count
                 count = count + 1
@@ -110,7 +112,8 @@ class HoidetDetector(BaseDetector):
                 output['predictions'].append({'bbox': [bbox_i_refine[0], bbox_i_refine[1],
                                                        bbox_i_refine[0] + bbox_i_refine[2],
                                                        bbox_i_refine[1] + bbox_i_refine[3]],
-                                              'category_id': obj_cate_ids[int(det_obj[0, obj_id, -1])]})
+                                              'category_id': obj_cate_ids[int(det_obj[0, obj_id, -1])],
+                                              'score': det_obj[0, obj_id, -2]})
 
             output['hoi_prediction'].append({'subject_id': sub_match_dict[sub_id], 'object_id': obj_match_dict[obj_id],
                                              'category_id': verb_cate_ids[int(rel_i[2])], 'score': rel_i[3]})

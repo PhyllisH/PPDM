@@ -16,17 +16,19 @@ def _nms(heat, kernel=3):
 
 def _topk(scores, K=40):
     batch, cat, height, width = scores.size()
-      
-    topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), K)
+    
+    # pick topK scores from feature map 
+    topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), K) # [batch, 80, K](K=100)
 
     topk_inds = topk_inds % (height * width)
     topk_ys   = (topk_inds / width).int().float()
     topk_xs   = (topk_inds % width).int().float()
-      
-    topk_score, topk_ind = torch.topk(topk_scores.view(batch, -1), K)
-    topk_clses = (topk_ind / K).int()
+    
+    # pick topK scores across class
+    topk_score, topk_ind = torch.topk(topk_scores.view(batch, -1), K)   # [batch, K]
+    topk_clses = (topk_ind / K).int()   # record the class id
     topk_inds = _gather_feat(
-        topk_inds.view(batch, -1, 1), topk_ind).view(batch, K)
+        topk_inds.view(batch, -1, 1), topk_ind).view(batch, K)   # [batch, K]
     topk_ys = _gather_feat(topk_ys.view(batch, -1, 1), topk_ind).view(batch, K)
     topk_xs = _gather_feat(topk_xs.view(batch, -1, 1), topk_ind).view(batch, K)
 
@@ -46,6 +48,7 @@ def hoidet_decode( heat_obj, wh, heat_rel, offset_sub, offset_obj, reg=None, cor
     heat_rel = _nms(heat_rel)
     heat_human = heat_obj[:,0,:,:].view(batch,1, height, width)
 
+    # pick up the topK object & human & interaction point (the pixel in feature map)
     scores_obj, inds_obj, clses_obj, ys_obj, xs_obj = _topk(heat_obj, K=K_obj)
     scores_obj = scores_obj.view(batch, K_obj, 1)
     clses_obj = clses_obj.view(batch, K_obj, 1).float()
@@ -58,11 +61,14 @@ def hoidet_decode( heat_obj, wh, heat_rel, offset_sub, offset_obj, reg=None, cor
     scores_rel = scores_rel.view(batch, K_rel, 1)
     clses_rel = clses_rel.view(batch, K_rel, 1).float()
 
+    # original offset_sub has shape [batch, 2, 128, 128] --> [batch, K, 2]
     offset_sub = _tranpose_and_gather_feat(offset_sub, inds_rel)
     offset_sub = offset_sub.view(batch, K_rel, 2)
-    dist_sub_xs = xs_rel.view(batch, K_rel, 1) - offset_sub[:, :, 0:1]
+    # generate the subject point location with interaction point and displancement (offset_sub)
+    dist_sub_xs = xs_rel.view(batch, K_rel, 1) - offset_sub[:, :, 0:1]  # [batch, K, 1]
     dist_sub_ys = ys_rel.view(batch, K_rel, 1) - offset_sub[:, :, 1:2]
-    match_sub_xs = match_rel_box(dist_sub_xs, xs_human.view(batch, K_human, 1), K_rel, K_human)
+    # calculate the distance between regressed subject point and the topK human point
+    match_sub_xs = match_rel_box(dist_sub_xs, xs_human.view(batch, K_human, 1), K_rel, K_human) # [K_rel, K_human]
     match_sub_ys = match_rel_box(dist_sub_ys, ys_human.view(batch, K_human, 1), K_rel, K_human)
 
     offset_obj = _tranpose_and_gather_feat(offset_obj, inds_rel)
@@ -72,26 +78,35 @@ def hoidet_decode( heat_obj, wh, heat_rel, offset_sub, offset_obj, reg=None, cor
     match_obj_xs = match_rel_box(dist_obj_xs, xs_obj.view(batch, K_obj, 1), K_rel, K_obj)
     match_obj_ys = match_rel_box(dist_obj_ys, ys_obj.view(batch, K_obj, 1), K_rel, K_obj)
 
-
+    # pick up the correlation mat between K_rel and K_obj --> [K_rel, K_obj]
     if corremat is not None:
         this_corremat = corremat[clses_rel.view(K_rel).long(),:]
         this_corremat = this_corremat[:, clses_obj.view(K_obj).long()]
     else:
         this_corremat = np.ones((K_rel, K_obj))
 
-
+    # rel-subject score: 1/dist_x * 1/dist_y * human_score --> [K_rel, K_human]
     dis_sub_score = (1/(match_sub_xs + 1)) * (1/(match_sub_ys + 1)) * ((scores_human.view(1, K_human).repeat(K_rel,1)))
+    # pick the max score human for each interaction point --> [K_rel]
     sub_rel_ids = torch.argmax(dis_sub_score, dim=1)
+    # the score of the subject
     sub_scores_rel = (scores_human.view(K_human))[sub_rel_ids.long()]
+
+    # similarly, get the score of the best matched object for the topK_rel interaction point
     dis_obj_score = (1 / (match_obj_xs + 1)) * (1 / (match_obj_ys + 1)) * ((scores_obj.view(1, K_obj).repeat(K_rel, 1)))
     dis_obj_score = dis_obj_score * this_corremat
     obj_rel_ids = torch.argmax(dis_obj_score, dim=1)
     obj_scores_rel = (scores_obj.view(K_obj))[obj_rel_ids.long()]
+    
+    # the hoi score = subject score * object score * rel score --> [K_rel]
     score_hoi = sub_scores_rel * obj_scores_rel * (scores_rel.view(K_rel))
+    # [K_rel, 4]: (sub_id, obj_id, rel_id, score_hoi)
     hoi_triplet = (torch.cat((sub_rel_ids.view(K_rel,1).float(), obj_rel_ids.view(K_rel,1).float(), clses_rel.view(K_rel,1).float(), score_hoi.view(K_rel,1)), 1)).cpu().numpy()
     hoi_triplet = hoi_triplet[np.argsort(-hoi_triplet[:,-1])]
     _, u_hoi_id = np.unique(hoi_triplet[:,[0,1,2]], axis=0, return_index=True)
     rel_triplet = hoi_triplet[u_hoi_id]
+
+    # regeression of human/object bounding box with center point & wh & reg (if exists)
     if reg is not None:
         reg_obj = _tranpose_and_gather_feat(reg, inds_obj)
         reg_obj = reg_obj.view(batch, K_obj, 2)

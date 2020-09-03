@@ -1,5 +1,52 @@
 import json
 import numpy as np
+import os
+from collections import OrderedDict
+
+
+def load_hico_category():
+    '''
+    Function: map category_id to category_name for HICO_DET dataset
+    Return:
+        hoi_c: hoi name list in the order of category_id
+        obj_c: object name list in the order of category_id
+        vb_c: action name list in the order of category_id
+    '''
+
+    def txt2list(_path):
+        with open(_path, 'r') as f:
+            cur_data = f.readlines()
+        category = []
+        for i in range(2, len(cur_data)):
+            tmp = cur_data[i].strip().split()
+            if len(tmp) > 2:
+                category.append(' '.join(tmp[::-1][:2]))
+            elif len(tmp) == 2:
+                category.append(tmp[1])
+            else:
+                category.append(tmp[0])
+        return category
+    
+    def sim_txt2list(_path):
+        with open(_path, 'r') as f:
+            cur_data = f.readlines()
+        category = []
+        for i in range(2, len(cur_data)):
+            category.append(cur_data[i].strip())
+        return category
+
+    root_dir = '/data/Data/hico_20160224_det/'
+    # Load category
+    hoi_category = os.path.join(root_dir, 'labels', 'hico_list_hoi.txt')
+    # obj_category = os.path.join(root_dir, 'labels', 'hico_list_obj.txt')
+    obj_category = os.path.join(root_dir, 'labels', 'hico_list_91obj.txt')
+    vb_category = os.path.join(root_dir, 'labels', 'hico_list_vb.txt')
+    hoi_c = txt2list(hoi_category)
+    obj_c = sim_txt2list(obj_category)
+    vb_c = txt2list(vb_category)
+    return hoi_c, obj_c, vb_c
+
+hoi_c, obj_c, vb_c = load_hico_category()
 
 class hico():
     def __init__(self, annotation_file):
@@ -36,7 +83,7 @@ class hico():
                 if triplet not in self.verb_name_dict:
                     continue
                 if self.verb_name_dict.index(triplet) not in self.train_sum.keys():
-                    self.train_sum[self.verb_name_dict.index(triplet)] =0
+                    self.train_sum[self.verb_name_dict.index(triplet)] = 0
                 self.train_sum[self.verb_name_dict.index(triplet)] += 1
         for i in range(len(self.verb_name_dict)):
             self.fp[i] = []
@@ -51,7 +98,22 @@ class hico():
                 self.c_inds.append(id)
 
         self.num_class = len(self.verb_name_dict)
+
     def evalution(self, predict_annot):
+        '''
+        predict_annot: same struct as the gt_annotations
+        predictions --> annotations [list of dict]
+        {
+            'bbox': [x0, y0, x1, y1]
+            'category_id': 
+        }
+        hoi_prediction --> hoi_annotation [list of dict]
+        {
+            'subject_id':
+            'object_id':
+            'category_id':
+        }
+        '''
         for pred_i in predict_annot:
             if pred_i['file_name'] not in self.file_name:
                 continue
@@ -76,6 +138,12 @@ class hico():
         return map
 
     def compute_map(self):
+        '''
+        self.verb_name_dict (length 600): dict of triplet, key is the hoi id, value is triplet <h-i-o>
+        self.sum_gt (length 600): dict of count, key is the hoi id, value is the hoi gt amount
+        self.tp / self.fp (length 600): dict of list, the key is the hoi id, value is the predictions (true 1 or false 0)
+        self.score: the same structure as self.tp and self.fp, the value is the prediction score(sub_score*obj_score*rel_score) (between 0 - 1)
+        '''
         ap = np.zeros(self.num_class)
         max_recall = np.zeros(self.num_class)
         for i in range(len(self.verb_name_dict)):
@@ -96,10 +164,9 @@ class hico():
             tp = np.cumsum(tp)
             rec = tp / sum_gt
             prec = tp / (fp + tp)
-            ap[i] = self.voc_ap(rec,prec)
+            ap[i] = self.voc_ap(rec, prec)
             max_recall[i] = np.max(rec)
-            #print('class {} --- ap: {}   max recall: {}'.format(
-             #    self.verb_name_dict[i], ap[i-1], max_recall[i-1]))
+            print('class {} {:10}-{:10} | --- ap: {:.04f} --- | --- max recall: {:.04f} ---|'.format(i, vb_c[self.verb_name_dict[i][2]-1], obj_c[self.verb_name_dict[i][1]-1], ap[i], max_recall[i]))
         mAP = np.mean(ap[:])
         mAP_rare = np.mean(ap[self.r_inds])
         mAP_nonrare = np.mean(ap[self.c_inds])
@@ -107,6 +174,14 @@ class hico():
         print('--------------------')
         print('mAP: {} mAP rare: {}  mAP nonrare: {}  max recall: {}'.format(mAP, mAP_rare, mAP_nonrare, m_rec))
         print('--------------------')
+        
+        # ---------- save AP for each hoi class --------- #
+        hoi_result = OrderedDict()
+        hoi_result['ap'] = list(ap)
+        hoi_result['max_recall'] = list(max_recall)
+        hoi_result['verb_name_dict'] = self.verb_name_dict
+        with open('/data/Data/hico_20160224_det/ppdm_result/hoi_ap.json', 'w') as f:
+            json.dump(hoi_result, f)
         return mAP
 
     def voc_ap(self, rec, prec):
@@ -128,22 +203,24 @@ class hico():
                 is_match = 0
                 if isinstance(pred_hoi_i['category_id'], str):
                     pred_hoi_i['category_id'] = int(pred_hoi_i['category_id'].replace('\n', ''))
+                # pred bbox are matched (iou) with the gt bbox
                 if len(match_pairs) != 0 and pred_hoi_i['subject_id'] in pos_pred_ids and pred_hoi_i['object_id'] in pos_pred_ids:
                     pred_sub_ids = match_pairs[pred_hoi_i['subject_id']]
                     pred_obj_ids = match_pairs[pred_hoi_i['object_id']]
-                    pred_obj_ov=bbox_ov[pred_hoi_i['object_id']]
-                    pred_sub_ov=bbox_ov[pred_hoi_i['subject_id']]
+                    pred_obj_ov = bbox_ov[pred_hoi_i['object_id']]
+                    pred_sub_ov = bbox_ov[pred_hoi_i['subject_id']]
                     pred_category_id = pred_hoi_i['category_id']
-                    max_ov=0
-                    max_gt_id=0
+                    max_ov = 0
+                    max_gt_id = 0
+                    # for each predicted hoi, if there are two gt matched, pick the gt with the largest object score
                     for gt_id in range(len(gt_hoi)):
                         gt_hoi_i = gt_hoi[gt_id]
                         if (gt_hoi_i['subject_id'] in pred_sub_ids) and (gt_hoi_i['object_id'] in pred_obj_ids) and (pred_category_id == gt_hoi_i['category_id']):
                             is_match = 1
-                            min_ov_gt=min(pred_sub_ov[pred_sub_ids.index(gt_hoi_i['subject_id'])], pred_obj_ov[pred_obj_ids.index(gt_hoi_i['object_id'])])
-                            if min_ov_gt>max_ov:
-                                max_ov=min_ov_gt
-                                max_gt_id=gt_id
+                            min_ov_gt = min(pred_sub_ov[pred_sub_ids.index(gt_hoi_i['subject_id'])], pred_obj_ov[pred_obj_ids.index(gt_hoi_i['object_id'])])
+                            if min_ov_gt > max_ov:
+                                max_ov = min_ov_gt
+                                max_gt_id = gt_id
                 if pred_hoi_i['category_id'] not in list(self.fp.keys()):
                     continue
                 triplet = [pred_bbox[pred_hoi_i['subject_id']]['category_id'], pred_bbox[pred_hoi_i['object_id']]['category_id'], pred_hoi_i['category_id']]
@@ -160,6 +237,9 @@ class hico():
                 self.score[verb_id].append(pred_hoi_i['score'])
 
     def compute_iou_mat(self, bbox_list1, bbox_list2):
+        '''
+        Function: match a detected bbox for each gt bbox (iou >= 0.5)
+        '''
         iou_mat = np.zeros((len(bbox_list1), len(bbox_list2)))
         if len(bbox_list1) == 0 or len(bbox_list2) == 0:
             return {}
@@ -168,9 +248,9 @@ class hico():
                 iou_i = self.compute_IOU(bbox1, bbox2)
                 iou_mat[i, j] = iou_i
 
-        iou_mat_ov=iou_mat.copy()
-        iou_mat[iou_mat>= 0.5] = 1
-        iou_mat[iou_mat< 0.5] = 0
+        iou_mat_ov = iou_mat.copy()
+        iou_mat[iou_mat >= 0.5] = 1
+        iou_mat[iou_mat < 0.5] = 0
 
         match_pairs = np.nonzero(iou_mat)
         match_pairs_dict = {}

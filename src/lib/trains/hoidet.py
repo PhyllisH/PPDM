@@ -26,6 +26,32 @@ class HoidetLoss(torch.nn.Module):
         hm_loss, wh_loss, off_loss, hm_rel_loss, sub_offset_loss, obj_offset_loss = 0, 0, 0, 0, 0, 0
         for s in range(opt.num_stacks):
             output = outputs[s]
+            '''
+            output
+            {
+                'hm': [batch, 80, 128, 128]
+                'wh': [batch, 2, 128, 128]
+                'hm_rel': [batch, 117, 128, 128]
+                'sub_offset': [batch, 2, 128, 128]  # from interaction point to subject point: vector
+                'obj_offset': [batch, 2, 128, 128]  # from interaction point to object point: vector
+                'reg': [batch, 2, 128, 128]
+            }
+
+            batch
+            {
+                'input': [batch, 3, 512, 512]   # input image
+                'hm': [batch, 80, 128, 128]
+                'reg_mask': [batch, 128]    # how many objects in GT (max is 128), if the gt exists, set 1
+                'ind': [batch, 128] # the index of the feature map location [w*y+x] of the object (if exists, else 0)
+                'wh': [batch, 128, 2]   # the object width and height (if exists, else [0,0])
+                'reg': [batch, 128, 2]  # the offset between the int and float center point (for each feature map pixel)
+                'hm_rel': [batch, 117, 128, 128]
+                'offset_mask': [batch, 64]     # how many interactions in GT (max is 64), if the gt exists, set 1
+                'rel_ind': [batch, 64] # the index of the feature map location [w*y+x] of the interaction (if exists, else 0)
+                'sub_offset': [batch, 64, 2]  # from interaction point to subject point: vector;
+                'obj_offset': [batch, 64, 2]  # from interaction point to object point: vector   
+            }
+            '''
             if not opt.mse_loss:
                 output['hm'] = _sigmoid(output['hm'])
                 output['hm_rel'] = _sigmoid(output['hm_rel'])

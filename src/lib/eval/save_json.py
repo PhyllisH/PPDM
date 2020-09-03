@@ -1,5 +1,7 @@
 import json, os
 import numpy as np
+
+
 class MyEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.integer):
